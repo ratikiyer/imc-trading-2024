@@ -1,4 +1,6 @@
-from packages.datamodel import OrderDepth, TradingState, Order, Trade, ConversionObservation
+from datamodel import OrderDepth
+from datamodel import TradingState
+from datamodel import Order
 from typing import Dict, List
 import pandas as pd
 import numpy as np
@@ -17,30 +19,33 @@ import numpy as np
 # observations: Observation
 class DataParser:
 
-    input_file: str = ""
-    output_file: str = ""
+    raw_data: pd.DataFrame
 
     # Each key in the map is a unique timestamp, representing various TradingState objects
-    trading_data: Dict[int, pd.DataFrame] = {}
+    trading_data: Dict[int, pd.DataFrame]
 
     # Maps time_stamp -> [product_name -> OrderDepth]
-    order_depths: Dict[int, Dict[str, OrderDepth]] = {}
+    order_depths: Dict[int, Dict[str, OrderDepth]]
 
-    trading_states: Dict[int, TradingState] = {}
+    trading_states: Dict[int, TradingState]
 
-    def __init__(self, input_file: str, output_file: str) -> None:
-        self.input_file = input_file
-        self.output_file = output_file
-        self.parse_csv()
-        self.fill_order_depths()
+    def __init__(self) -> None:
+        self.raw_data = {}
+        self.trading_data = {}
+        self.order_depths = {}
+        self.trading_states = {}
 
-    def parse_csv(self):
-        df = pd.read_csv(self.input_file, delimiter=';')
-        df.replace('', np.nan)
-        if "profit_and_loss" in df.columns:
-            df.drop(columns="profit_and_loss", inplace=True)
-        self.trading_data = {time: group for time, group in df.groupby('timestamp')}
-    
+    def parse_csv(self, input_file: str):
+        self.raw_data = pd.read_csv(input_file, delimiter=',')
+        print(self.raw_data.head())
+        self.raw_data.replace('', np.nan)
+        if "profit_and_loss" in self.raw_data.columns:
+            self.raw_data.drop(columns="profit_and_loss", inplace=True)
+        self.trading_data = {time: group for time, group in self.raw_data.groupby('timestamp')}
+
+    def write_csv(self, output_file: str):
+        self.raw_data.to_csv(self.output_file)
+
     def fill_order_depths(self):
         for timestamp, df in self.trading_data.items():
             if timestamp not in self.order_depths.keys():

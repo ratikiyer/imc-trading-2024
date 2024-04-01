@@ -1,4 +1,7 @@
-from packages.datamodel import OrderDepth, TradingState, Order, Trade, ConversionObservation
+from datamodel import TradingState
+from datamodel import Trade
+from datamodel import Order
+from datamodel import OrderDepth
 from typing import Dict, List
 import pandas as pd
 import numpy as np
@@ -15,8 +18,6 @@ MAX_CACHE_CAPACITY = 10
 
 class Trader:
     
-    # Current time (gets incremented by 1 everytime run is called)
-    time : int = 0
     # Exponential time decay factor of importance weighting
     # Goal is to find optimal lambda_value that reflects accurate time weighting
     lambda_value : int = 1
@@ -50,8 +51,6 @@ class Trader:
             print("Buy Order depth : " + str(len(order_depth.buy_orders)) + ", Sell order depth : " + str(len(order_depth.sell_orders)))
         
 
-
-        time += 1
         # Return a map from product_name -> Order
         return result
     

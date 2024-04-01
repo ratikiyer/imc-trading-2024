@@ -10,7 +10,6 @@ Position = int
 UserId = str
 ObservationValue = int
 
-# DO NOT CHANGE THESE CLASS IMPLEMENTATIONS
 
 class Listing:
 
