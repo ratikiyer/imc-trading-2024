@@ -1,17 +1,29 @@
-import datamodel
+import sys
+sys.path.insert(0, '/Users/ratikiyer/Documents/UIUC/IMC/imc_trading_2024')
+from packages.backtester import BackTester
+from packages.datamodel import (Time, Symbol, Product, Position, UserId, ObservationValue,
+                                TradingState, Trade, Listing, Order, OrderDepth, Observation, ConversionObservation)
+from packages.dataparser import DataParser
+from packages.logger import Logger
 from trader import Trader
-from data_parser import DataParser
 from typing import Dict, List
 import pandas as pd
 import tabulate
 import csv
 
 def main():
-    file_in: str = "./data/2023_price_data_round_1_day_1.csv"
-    file_out: str = "./data/edited_2023_price_data_round_1_day_1.csv"
+    
+    file_in = "./data/tutorial_data.csv"
+    file_out = "./data/tutorial_results_data.csv"
     parser = DataParser()
 
     parser.parse_csv(file_in)
+    trading_states: Dict[int, TradingState] = parser.get_trading_states()
+    for timestep in trading_states.keys():
+        state = trading_states[timestep]
+        print(state.toJSON())
+
+
 
     trader = Trader()
         
