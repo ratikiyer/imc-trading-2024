@@ -1,137 +1,248 @@
-from packages.datamodel import OrderDepth, Order, Trade, TradingState
-from packages.logger import logger
-from typing import Dict, List
+from packages.datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
+from typing import Dict, List, Any
 import pandas as pd
 import numpy as np
 import statistics as stat
 import math
 import jsonpickle
 import collections
+import json
+
+class Logger:
+    def __init__(self) -> None:
+        self.logs = ""
+
+    def print(self, *objects: Any, sep: str = " ", end: str = "\n") -> None:
+        self.logs += sep.join(map(str, objects)) + end
+
+    def flush(self, state: TradingState, orders: dict[Symbol, list[Order]], conversions: int, trader_data: str) -> None:
+        print(json.dumps([
+            self.compress_state(state),
+            self.compress_orders(orders),
+            conversions,
+            trader_data,
+            self.logs,
+        ], cls=ProsperityEncoder, separators=(",", ":")))
+
+        self.logs = ""
+
+    def compress_state(self, state: TradingState) -> list[Any]:
+        return [
+            state.timestamp,
+            state.traderData,
+            self.compress_listings(state.listings),
+            self.compress_order_depths(state.order_depths),
+            self.compress_trades(state.own_trades),
+            self.compress_trades(state.market_trades),
+            state.position,
+            self.compress_observations(state.observations),
+        ]
+
+    def compress_listings(self, listings: dict[Symbol, Listing]) -> list[list[Any]]:
+        compressed = []
+        for listing in listings.values():
+            compressed.append([listing["symbol"], listing["product"], listing["denomination"]])
+
+        return compressed
+
+    def compress_order_depths(self, order_depths: dict[Symbol, OrderDepth]) -> dict[Symbol, list[Any]]:
+        compressed = {}
+        for symbol, order_depth in order_depths.items():
+            compressed[symbol] = [order_depth.buy_orders, order_depth.sell_orders]
+
+        return compressed
+
+    def compress_trades(self, trades: dict[Symbol, list[Trade]]) -> list[list[Any]]:
+        compressed = []
+        for arr in trades.values():
+            for trade in arr:
+                compressed.append([
+                    trade.symbol,
+                    trade.price,
+                    trade.quantity,
+                    trade.buyer,
+                    trade.seller,
+                    trade.timestamp,
+                ])
+
+        return compressed
+
+    def compress_observations(self, observations: Observation) -> list[Any]:
+        conversion_observations = {}
+        for product, observation in observations.conversionObservations.items():
+            conversion_observations[product] = [
+                observation.bidPrice,
+                observation.askPrice,
+                observation.transportFees,
+                observation.exportTariff,
+                observation.importTariff,
+                observation.sunlight,
+                observation.humidity,
+            ]
+
+        return [observations.plainValueObservations, conversion_observations]
+
+    def compress_orders(self, orders: dict[Symbol, list[Order]]) -> list[list[Any]]:
+        compressed = []
+        for arr in orders.values():
+            for order in arr:
+                compressed.append([order.symbol, order.price, order.quantity])
+
+        return compressed
+logger = Logger()
 
 # Add more products and position limits as the game continues
-PRODUCTS = ["AMETHYST", "STARFRUIT"]
-POSITION_LIMITS = {"AMETHYST" : 20, "STARFRUIT" : 20}
+PRODUCTS = ["AMETHYSTS", "STARFRUIT"]
+POSITION_LIMITS = {"AMETHYSTS" : 20, "STARFRUIT" : 20}
+DEFAULT_PRICES = {'AMETHYSTS' : 10000, 'STARFRUIT' : 5000}
 
 MAX_CACHE_SIZE = 4
 
 
 class Trader:
     
+
     # Keep track of:
     #   1. Net position of a product (-: short position, +: long position)
     #   2. Absolute value of the quantity of buy and sell orders on a product
-    position : Dict[str, int] = {product : 0 for product in PRODUCTS}
-    volume_traded : Dict[str, int] = {product : 0 for product in PRODUCTS}
+    position: Dict[str, int] = {product: 0 for product in PRODUCTS}
+    volume_traded: Dict[str, int] = {product: 0 for product in PRODUCTS}
     # Map the person's user_id -> (product_name -> importance)
     # Map is reset and calculated on new data at every TradingState iteration (might have to change)
     # person_importance : Dict[str, Dict[str, float]]
     starfruit_cache: Dict[int, float] = {}
 
-    def calculate_amethyst_orders(self, order_depth: OrderDepth) -> List[Order]:
-        orders = []
-        if min(order_depth.sell_orders.items()) < 10000:
-            quantity =  -(POSITION_LIMITS["AMETHYST"] - self.position["AMETHYST"])
-            order = Order("AMETHYST", min(order_depth.sell_orders.items()), quantity)
-            orders.append(order)
-        elif max(order_depth.buy_orders.items() > 10000):
-            quantity =  (POSITION_LIMITS["AMETHYST"] - self.position["AMETHYST"])
-            order = Order("AMETHYST", max(order_depth.buy_orders.items()), quantity)
-            orders.append(order)
+    # def calculate_amethyst_orders(self, order_depth: OrderDepth) -> List[Order]:
+    #     orders = []
+    #     if min(order_depth.sell_orders.items()) < 10000:
+    #         quantity =  -(POSITION_LIMITS["AMETHYST"] - self.position["AMETHYST"])
+    #         order = Order("AMETHYST", min(order_depth.sell_orders.items()), quantity)
+    #         orders.append(order)
+    #     elif max(order_depth.buy_orders.items() > 10000):
+    #         quantity =  (POSITION_LIMITS["AMETHYST"] - self.position["AMETHYST"])
+    #         order = Order("AMETHYST", max(order_depth.buy_orders.items()), quantity)
+    #         orders.append(order)
         
-        return orders
+    #     return orders
     
-    def calculate_starfruit_price(self) -> int:
-        importance = [-0.01869561,  0.0455032 ,  0.16316049,  0.8090892]
-        intercept = 4.481696494462085
-        nxt_price = intercept
-        for i, val in enumerate(self.bananas_cache):
-            nxt_price += val * importance[i]
-
-        return int(round(nxt_price))
+    def get_position(self, product, state : TradingState):
+        return state.position.get(product, 0)    
     
-    def calculate_starfruit_orders(self, product, order_depth, acc_bid, acc_ask, LIMIT) -> List[Order]:
-        orders: list[Order] = []
+    def get_mid_price(self, product, state : TradingState):
+        default_price = DEFAULT_PRICES[product]
 
-        osell = collections.OrderedDict(sorted(order_depth.sell_orders.items()))
-        obuy = collections.OrderedDict(sorted(order_depth.buy_orders.items(), reverse=True))
-
-        sell_vol, best_sell_pr = self.values_extract(osell)
-        buy_vol, best_buy_pr = self.values_extract(obuy, 1)
-
-        cpos = self.position[product]
-
-        for ask, vol in osell.items():
-            if ((ask <= acc_bid) or ((self.position[product]<0) and (ask == acc_bid+1))) and cpos < LIMIT:
-                order_for = min(-vol, LIMIT - cpos)
-                cpos += order_for
-                assert(order_for >= 0)
-                orders.append(Order(product, ask, order_for))
-
-        undercut_buy = best_buy_pr + 1
-        undercut_sell = best_sell_pr - 1
-
-        bid_pr = min(undercut_buy, acc_bid) # we will shift this by 1 to beat this price
-        sell_pr = max(undercut_sell, acc_ask)
-
-        if cpos < LIMIT:
-            num = LIMIT - cpos
-            orders.append(Order(product, bid_pr, num))
-            cpos += num
+        if product not in state.order_depths:
+            return default_price
         
-        cpos = self.position[product]
+        market_bids = state.order_depths[product].buy_orders 
+        if len(market_bids) == 0:
+            # There are no bid orders in the market (midprice undefined)
+            return default_price
+              
+        market_asks = state.order_depths[product].sell_orders
+        if len(market_asks) == 0:
+            # There are no bid orders in the market (mid_price undefined)
+            return default_price
         
+        best_bid = max(market_bids)
+        best_ask = min(market_asks)
+        return (best_bid + best_ask)/2
 
-        for bid, vol in obuy.items():
-            if ((bid >= acc_ask) or ((self.position[product]>0) and (bid+1 == acc_ask))) and cpos > -LIMIT:
-                order_for = max(-vol, -LIMIT-cpos)
-                # order_for is a negative number denoting how much we will sell
-                cpos += order_for
-                assert(order_for <= 0)
-                orders.append(Order(product, bid, order_for))
+    def starfruit_orders(self, state: TradingState):
+        prod = 'STARFRUIT'
+        order_depth: OrderDepth = state.order_depths[prod]
+        order_list: List[Order] = []
+        starfruits_limit = POSITION_LIMITS[prod]
+        default_price = DEFAULT_PRICES["STARFRUIT"]
+        cpos = self.get_position(prod, state)
+        
+        self.last_5_starfruit.append(self.get_mid_price(prod, state))
+        if (len(self.last_5_starfruit) > 3): self.last_5_starfruit = self.last_5_starfruit[1:]
+        
+        last_5_average = sum(self.last_5_starfruit) / len(self.last_5_starfruit)
 
-        if cpos > -LIMIT:
-            num = -LIMIT-cpos
-            orders.append(Order(product, sell_pr, num))
-            cpos += num
+        if (len(order_depth.sell_orders) != 0):
+            best_ask, best_ask_amount = list(order_depth.sell_orders.items())[0]
+            if (int(best_ask) < last_5_average and cpos < self.POSITION_LIMIT[prod]):
+                logger.print("BUY", str(-best_ask_amount) + "x", best_ask)
+                order_list.append(Order(prod, best_ask, -best_ask_amount))
+                cpos += -1 * best_ask_amount
+                
+        if (len(order_depth.buy_orders) != 0):
+            best_bid, best_bid_amount = list(order_depth.buy_orders.items())[0]
+            if int(best_bid) > last_5_average:
+                logger.print("SELL", str(best_bid_amount) + "x", best_bid)
+                order_list.append(Order(prod, best_bid, -best_bid_amount))
+                
+        return order_list
+               
+    def amethyst_orders(self, state: TradingState):
+        orders = {'AMETHYSTS' : []}
+        prod = 'AMETHYSTS'
+        order_depth: OrderDepth = state.order_depths[prod]
+        order_list: List[Order] = []
+        acceptable_price = 10000
+        amethysts_limit = POSITION_LIMITS[prod]
 
-        return orders
+        cpos = self.get_position(prod, state)
+        max_purchasable = POSITION_LIMITS['AMETHYSTS'] - cpos
+        logger.print(f'{order_depth.sell_orders}, {order_depth.buy_orders}')
+
+        if len(order_depth.sell_orders) != 0:
+            ask_index = 0
+            while (cpos < POSITION_LIMITS['AMETHYSTS']):
+                best_ask, best_ask_amount = list(order_depth.sell_orders.items())[ask_index]
+                if int(best_ask) < acceptable_price:
+                    logger.print("BUY", str(-best_ask_amount) + "x", best_ask)
+                    order_list.append(Order(prod, best_ask, -best_ask_amount))
+                    cpos += -1 * best_ask_amount
+                    ask_index += 1
+                else: break
     
-    def calculate_orders(self, product, order_depth, bid, ask) -> List[Order]:
-        if product == "AMETHYST":
-            return self.calculate_amethyst_orders(self, order_depth)
-        elif product == "STARFRUIT":
-            return self.calculate_starfruit_orders(self, "STARFRUIT", order_depth, bid, ask, POSITION_LIMITS[product])
+        if len(order_depth.buy_orders) != 0:
+            bid_index = 0
+            while (int(list(order_depth.buy_orders.items())[bid_index][0]) > acceptable_price):
+                best_bid, best_bid_amount = list(order_depth.buy_orders.items())[bid_index]
+                if int(best_bid) > acceptable_price:
+                    logger.print("SELL", str(best_bid_amount) + "x", best_bid)
+                    order_list.append(Order(prod, best_bid, -best_bid_amount))
+                    bid_index += 1
+        
+        orders[prod] = order_list
 
+        return order_list
+    
     def run(self, state: TradingState):
         #print("traderData: " + state.traderData)
         #print("Observations: " + str(state.observations))
 
-		# Orders to be placed on exchange matching engine
+				# Orders to be placed on exchange matching engine
         result = {}
-        for product in state.order_depths:
-            if (product == "AMETHYSTS"): continue
+        # for product in state.order_depths:
+        #     if (product == "AMETHYSTS"): continue
 
-            order_depth: OrderDepth = state.order_depths[product]
-            orders: List[Order] = []
-            acceptable_price = 100000  # Participant should calculate this value
-            #print("Acceptable price : " + str(acceptable_price))
-            #print("Buy Order depth : " + str(len(order_depth.buy_orders)) + ", Sell order depth : " + str(len(order_depth.sell_orders)))
+        #     order_depth: OrderDepth = state.order_depths[product]
+        #     orders: List[Order] = []
+        #     acceptable_price = 100000  # Participant should calculate this value
+        #     #print("Acceptable price : " + str(acceptable_price))
+        #     #print("Buy Order depth : " + str(len(order_depth.buy_orders)) + ", Sell order depth : " + str(len(order_depth.sell_orders)))
     
-            if len(order_depth.sell_orders) != 0:
-                best_ask, best_ask_amount = list(order_depth.sell_orders.items())[0]
-                if int(best_ask) < acceptable_price:
-                    #print("BUY", str(-best_ask_amount) + "x", best_ask)
-                    orders.append(Order(product, best_ask, -best_ask_amount))
+        #     if len(order_depth.sell_orders) != 0:
+        #         best_ask, best_ask_amount = list(order_depth.sell_orders.items())[0]
+        #         if int(best_ask) < acceptable_price:
+        #             #print("BUY", str(-best_ask_amount) + "x", best_ask)
+        #             orders.append(Order(product, best_ask, -best_ask_amount))
     
-            if len(order_depth.buy_orders) != 0:
-                best_bid, best_bid_amount = list(order_depth.buy_orders.items())[0]
-                if int(best_bid) > acceptable_price:
-                    #print("SELL", str(best_bid_amount) + "x", best_bid)
-                    orders.append(Order(product, best_bid, -best_bid_amount))
+        #     if len(order_depth.buy_orders) != 0:
+        #         best_bid, best_bid_amount = list(order_depth.buy_orders.items())[0]
+        #         if int(best_bid) > acceptable_price:
+        #             #print("SELL", str(best_bid_amount) + "x", best_bid)
+        #             orders.append(Order(product, best_bid, -best_bid_amount))
             
-            result[product] = orders
+        #     result[product] = orders
 
-        result['AMETHYSTS'] = self.calculate_amethyst_orders(state)
+        result['STARFRUIT'] = self.starfruit_orders(state)
+        result['AMETHYSTS'] = self.amethyst_orders(state)
     
 		    # String value holding Trader state data required. 
 				# It will be delivered as TradingState.traderData on next execution.

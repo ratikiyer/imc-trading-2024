@@ -1,6 +1,5 @@
 import sys
 sys.path.insert(0, '/Users/ratikiyer/Documents/UIUC/IMC/imc_trading_2024')
-from packages.backtester import BackTester
 from packages.datamodel import (Time, Symbol, Product, Position, UserId, ObservationValue,
                                 TradingState, Trade, Listing, Order, OrderDepth, Observation, ConversionObservation)
 from packages.dataparser import DataParser

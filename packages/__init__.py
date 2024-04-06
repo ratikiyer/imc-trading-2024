@@ -1,5 +1,4 @@
 # packages/__init__.py
-from .backtester import BackTester
 from .datamodel import Time, Symbol, Product, Position, UserId, ObservationValue
 from .datamodel import TradingState, Trade, Listing, Order, OrderDepth, Observation, ConversionObservation
 from .dataparser import DataParser

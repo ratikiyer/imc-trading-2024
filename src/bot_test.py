@@ -5,7 +5,7 @@ import math
 import copy
 import numpy as np
 import json
-from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
+from packages.datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
 from typing import Any, Dict, List
 
 class Logger:
