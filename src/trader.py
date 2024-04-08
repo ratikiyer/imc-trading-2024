@@ -1,12 +1,12 @@
-from packages.datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
-from typing import Dict, List, Any
-import pandas as pd
-import numpy as np
-import statistics as stat
-import math
-import jsonpickle
 import collections
+from collections import defaultdict
+import random
+import math
+import copy
+import numpy as np
 import json
+from packages.datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
+from typing import Any, Dict, List
 
 class Logger:
     def __init__(self) -> None:
@@ -91,45 +91,40 @@ class Logger:
         return compressed
 logger = Logger()
 
-# Add more products and position limits as the game continues
-PRODUCTS = ["AMETHYSTS", "STARFRUIT"]
-POSITION_LIMITS = {"AMETHYSTS" : 20, "STARFRUIT" : 20}
-DEFAULT_PRICES = {'AMETHYSTS' : 10000, 'STARFRUIT' : 5000}
 
-MAX_CACHE_SIZE = 4
 
 
 class Trader:
+    POSITION_LIMIT = {"AMETHYSTS" : 20, "STARFRUIT" : 20}
+    PRODUCTS = ['AMETHYSTS', 'STARFRUIT']
+    DEFAULT_PRICES = {
+    'AMETHYSTS' : 10000,
+    'STARFRUIT' : 5000
+    }
+    last_4_starfruit = []
+    ema_prices = dict()
+    for product in PRODUCTS:
+        ema_prices[product] = None
+    ema_param = 0.5
     
+    def update_ema_prices(self, state : TradingState, prod):
+        """
+        Update the exponential moving average of the prices of each product.
+        """
+        mid_price = self.get_mid_price(prod, state)
+            # Update ema price
+        if self.ema_prices[prod] is None:
+            self.ema_prices[prod] = self.DEFAULT_PRICES[prod]
+        else:
+            self.ema_prices[prod] = self.ema_param * mid_price + (1-self.ema_param) * self.ema_prices[prod]
 
-    # Keep track of:
-    #   1. Net position of a product (-: short position, +: long position)
-    #   2. Absolute value of the quantity of buy and sell orders on a product
-    position: Dict[str, int] = {product: 0 for product in PRODUCTS}
-    volume_traded: Dict[str, int] = {product: 0 for product in PRODUCTS}
-    # Map the person's user_id -> (product_name -> importance)
-    # Map is reset and calculated on new data at every TradingState iteration (might have to change)
-    # person_importance : Dict[str, Dict[str, float]]
-    starfruit_cache: Dict[int, float] = {}
-
-    # def calculate_amethyst_orders(self, order_depth: OrderDepth) -> List[Order]:
-    #     orders = []
-    #     if min(order_depth.sell_orders.items()) < 10000:
-    #         quantity =  -(POSITION_LIMITS["AMETHYST"] - self.position["AMETHYST"])
-    #         order = Order("AMETHYST", min(order_depth.sell_orders.items()), quantity)
-    #         orders.append(order)
-    #     elif max(order_depth.buy_orders.items() > 10000):
-    #         quantity =  (POSITION_LIMITS["AMETHYST"] - self.position["AMETHYST"])
-    #         order = Order("AMETHYST", max(order_depth.buy_orders.items()), quantity)
-    #         orders.append(order)
-        
-    #     return orders
-    
     def get_position(self, product, state : TradingState):
         return state.position.get(product, 0)    
     
     def get_mid_price(self, product, state : TradingState):
-        default_price = DEFAULT_PRICES[product]
+        default_price = self.ema_prices[product]
+        if (default_price is None):
+            default_price = self.DEFAULT_PRICES[product]
 
         if product not in state.order_depths:
             return default_price
@@ -152,63 +147,127 @@ class Trader:
         prod = 'STARFRUIT'
         order_depth: OrderDepth = state.order_depths[prod]
         order_list: List[Order] = []
-        starfruits_limit = POSITION_LIMITS[prod]
-        default_price = DEFAULT_PRICES["STARFRUIT"]
-        cpos = self.get_position(prod, state)
+        starfruits_limit = self.POSITION_LIMIT[prod]
+        default_price = 5000
+        coefficients = [0.19351935, 0.25166263, 0.22349804, 0.330427031]
+        cpos_bid = self.get_position(prod, state)
+        cpos_sell = self.get_position(prod, state)
         
-        self.last_5_starfruit.append(self.get_mid_price(prod, state))
-        if (len(self.last_5_starfruit) > 3): self.last_5_starfruit = self.last_5_starfruit[1:]
+        logger.print(f'{order_depth.sell_orders}, {order_depth.buy_orders}')
+
+        self.last_4_starfruit.append(self.get_mid_price(prod, state))
+        if (len(self.last_4_starfruit) > 4): self.last_4_starfruit = self.last_4_starfruit[1:]
         
-        last_5_average = sum(self.last_5_starfruit) / len(self.last_5_starfruit)
+        last_4_average = sum(self.last_4_starfruit) / len(self.last_4_starfruit)
+        
+        coef_index = 0
+        last_4_weighted = 0
+        while (coef_index < len(self.last_4_starfruit)):
+            last_4_weighted += coefficients[coef_index] * self.last_4_starfruit[coef_index]
+            coef_index += 1
+        last_4_weighted += 4.392
+        
+        self.update_ema_prices(state, prod)
+        ema_price = self.ema_prices[prod]
+        logger.print(f"LAST 4: {self.last_4_starfruit}, EMA: {ema_price}, WEIGHTED: {last_4_weighted}, AVERAGE: {last_4_average}")
 
         if (len(order_depth.sell_orders) != 0):
-            best_ask, best_ask_amount = list(order_depth.sell_orders.items())[0]
-            if (int(best_ask) < last_5_average and cpos < self.POSITION_LIMIT[prod]):
-                logger.print("BUY", str(-best_ask_amount) + "x", best_ask)
-                order_list.append(Order(prod, best_ask, -best_ask_amount))
-                cpos += -1 * best_ask_amount
-                
+            ask_index = 0
+            while (ask_index < len(order_depth.sell_orders) and cpos_bid < self.POSITION_LIMIT[prod]):
+                best_ask, best_ask_amount = list(order_depth.sell_orders.items())[ask_index]
+                if (int(best_ask) < ema_price and cpos_bid < self.POSITION_LIMIT[prod]):
+                    logger.print("BUY", str(-best_ask_amount) + "x", best_ask)
+                    order_list.append(Order(prod, best_ask, min(-best_ask_amount, (self.POSITION_LIMIT[prod] - cpos_bid))))
+                    cpos_bid += -1 * best_ask_amount
+                    ask_index += 1
+                else: break
+        
+        
         if (len(order_depth.buy_orders) != 0):
-            best_bid, best_bid_amount = list(order_depth.buy_orders.items())[0]
-            if int(best_bid) > last_5_average:
-                logger.print("SELL", str(best_bid_amount) + "x", best_bid)
-                order_list.append(Order(prod, best_bid, -best_bid_amount))
+            bid_index = 0
+            while (bid_index < len(order_depth.buy_orders) and cpos_sell > -self.POSITION_LIMIT[prod]):
+                best_bid, best_bid_amount = list(order_depth.buy_orders.items())[bid_index]
+                if int(best_bid) > ema_price:
+                    logger.print("SELL", str(best_bid_amount) + "x", best_bid)
+                    order_list.append(Order(prod, best_bid, max(-best_bid_amount, -(self.POSITION_LIMIT[prod] + cpos_sell))))
+                    cpos_sell += -1 * best_bid_amount
+                    bid_index += 1
+                else: break
                 
+        bid_volume = self.POSITION_LIMIT[prod] - cpos_bid
+        ask_volume = -self.POSITION_LIMIT[prod] - cpos_sell
+        
+        if (bid_volume > 0): 
+            order_list.append(Order(prod, math.floor(ema_price - 2), int(bid_volume)))
+        if (ask_volume < 0): 
+            order_list.append(Order(prod, math.ceil(ema_price + 2), int(ask_volume)))
+
+        
         return order_list
                
     def amethyst_orders(self, state: TradingState):
         orders = {'AMETHYSTS' : []}
         prod = 'AMETHYSTS'
+        bid_flag = False
+        sell_flag = False
         order_depth: OrderDepth = state.order_depths[prod]
         order_list: List[Order] = []
         acceptable_price = 10000
-        amethysts_limit = POSITION_LIMITS[prod]
+        amethysts_limit = self.POSITION_LIMIT[prod]
 
-        cpos = self.get_position(prod, state)
-        max_purchasable = POSITION_LIMITS['AMETHYSTS'] - cpos
+        cpos_bid = self.get_position(prod, state)
+        cpos_sell = self.get_position(prod, state)
+        #max_purchasable = self.POSITION_LIMIT['AMETHYSTS'] - cpos
         logger.print(f'{order_depth.sell_orders}, {order_depth.buy_orders}')
 
         if len(order_depth.sell_orders) != 0:
             ask_index = 0
-            while (cpos < POSITION_LIMITS['AMETHYSTS']):
+            while (cpos_bid < self.POSITION_LIMIT['AMETHYSTS']):
                 best_ask, best_ask_amount = list(order_depth.sell_orders.items())[ask_index]
                 if int(best_ask) < acceptable_price:
                     logger.print("BUY", str(-best_ask_amount) + "x", best_ask)
                     order_list.append(Order(prod, best_ask, -best_ask_amount))
-                    cpos += -1 * best_ask_amount
+                    cpos_bid += -1 * best_ask_amount
                     ask_index += 1
+                    bid_flag = True
                 else: break
-    
+                
+        
         if len(order_depth.buy_orders) != 0:
             bid_index = 0
-            while (int(list(order_depth.buy_orders.items())[bid_index][0]) > acceptable_price):
+            while (cpos_sell > -self.POSITION_LIMIT['AMETHYSTS']):
                 best_bid, best_bid_amount = list(order_depth.buy_orders.items())[bid_index]
                 if int(best_bid) > acceptable_price:
                     logger.print("SELL", str(best_bid_amount) + "x", best_bid)
                     order_list.append(Order(prod, best_bid, -best_bid_amount))
+                    cpos_sell += -1 * best_bid_amount
                     bid_index += 1
+                    sell_flag = True
+                else: break
+                    
+        bid_volume = self.POSITION_LIMIT[prod] - cpos_bid
+        ask_volume = -self.POSITION_LIMIT[prod] - cpos_sell
         
-        orders[prod] = order_list
+        market_bids = state.order_depths[prod].buy_orders 
+        market_asks = state.order_depths[prod].sell_orders
+        best_bid = 10000
+        best_ask = 10000
+
+        if len(market_asks) == 0 or len(market_bids) == 0: acceptable_price = 10000
+        else:
+            best_bid = max(market_bids)
+            best_ask = min(market_asks)
+            acceptable_price = int((best_bid + best_ask)/2)
+        
+        if (bid_volume > 0): 
+            #if (acceptable_price < 10000):
+            order_list.append(Order(prod, min(acceptable_price - 2, best_bid + 1), int(bid_volume)))
+            #else: order_list.append(Order(prod, 9999, int(bid_volume)))
+        if (ask_volume < 0): 
+            #if (acceptable_price > 10000):
+            #order_list.append(Order(prod, acceptable_price + 1, int(ask_volume/2)))
+            order_list.append(Order(prod, max(acceptable_price + 2, best_ask - 1), int(ask_volume)))
+            #else: order_list.append(Order(prod, 10001, int(ask_volume)))
 
         return order_list
     
@@ -252,33 +311,3 @@ class Trader:
         conversions = 1
         logger.flush(state, result, conversions, trader_data)
         return result, conversions, trader_data
-    
-
-
-    # def calculate_person_importance(self, state: TradingState) -> Dict[str, Dict[str, float]]:
-    #     person_importance: Dict[str, Dict[str, float]] = {}
-    #     for product in PRODUCTS:
-    #         product_vol = 0
-    #         last_trade : Trade
-    #         for trade in state.market_trades[product]:
-    #             if (trade.buyer == trade.seller):
-    #                 continue 
-    #             user_id_buy, user_id_sell = trade.buyer, trade.seller
-            
-    #             person_importance.setdefault(user_id_buy, {}).setdefault(product, 0)
-    #             person_importance[user_id_buy][product] += abs(trade.quantity)
-                
-    #             person_importance.setdefault(user_id_sell, {}).setdefault(product, 0)
-    #             person_importance[user_id_sell][product] += abs(trade.quantity)
-            
-    #         product_vol = sum(person_importance[user_id][product] for user_id in person_importance.keys())
-            
-    #         if last_trade.timestamp < self.time:
-    #             elapsed_time = self.time - last_trade.timestamp
-    #             for user_id in person_importance:
-    #                 if product in person_importance[user_id]:
-    #                     person_importance[user_id][product] = ((person_importance[user_id][product] / product_vol) 
-    #                                                             * np.exp(-self.lambda_value * elapsed_time / 100) 
-    #                                                             * (1 - np.exp(self.lambda_value)))
-        
-    #     return person_importance
