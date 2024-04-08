@@ -152,6 +152,7 @@ class Trader:
         coefficients = [0.19351935, 0.25166263, 0.22349804, 0.330427031]
         cpos_bid = self.get_position(prod, state)
         cpos_sell = self.get_position(prod, state)
+        cpos = cpos_sell
         
         logger.print(f'{order_depth.sell_orders}, {order_depth.buy_orders}')
 
@@ -197,10 +198,24 @@ class Trader:
         bid_volume = self.POSITION_LIMIT[prod] - cpos_bid
         ask_volume = -self.POSITION_LIMIT[prod] - cpos_sell
         
+        market_bids = state.order_depths[prod].buy_orders 
+        market_asks = state.order_depths[prod].sell_orders
+        best_bid = ema_price
+        best_ask = ema_price
+        acceptable_price = ema_price
+        
+        if len(market_asks) == 0 or len(market_bids) == 0: acceptable_price = ema_price
+        else:
+            best_bid = max(market_bids)
+            best_ask = min(market_asks)
+        
+        # if (cpos > 0):
+        #     order_list.append(Order(prod, min(math.floor(ema_price - 2), best_bid + 1), int(bid_volume)))
+        
         if (bid_volume > 0): 
-            order_list.append(Order(prod, math.floor(ema_price - 2), int(bid_volume)))
+            order_list.append(Order(prod, min(math.floor(ema_price - 2), best_bid + 1), int(bid_volume)))
         if (ask_volume < 0): 
-            order_list.append(Order(prod, math.ceil(ema_price + 2), int(ask_volume)))
+            order_list.append(Order(prod, max(math.ceil(ema_price + 2), best_ask - 1), int(ask_volume)))
 
         
         return order_list
