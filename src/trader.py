@@ -92,8 +92,6 @@ class Logger:
 logger = Logger()
 
 
-
-
 class Trader:
     POSITION_LIMIT = {"AMETHYSTS" : 20, "STARFRUIT" : 20}
     PRODUCTS = ['AMETHYSTS', 'STARFRUIT']
