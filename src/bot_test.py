@@ -103,27 +103,28 @@ class Trader:
     }
     last_4_starfruit = []
     ema_prices = dict()
+    for product in PRODUCTS:
+        ema_prices[product] = None
+    ema_param = 0.5
     
-    def update_ema_prices(self, state : TradingState):
+    def update_ema_prices(self, state : TradingState, prod):
         """
         Update the exponential moving average of the prices of each product.
         """
-        for product in self.PRODUCTS:
-            mid_price = self.get_mid_price(product, state)
-            if mid_price is None:
-                continue
-
+        mid_price = self.get_mid_price(prod, state)
             # Update ema price
-            if self.ema_prices[product] is None:
-                self.ema_prices[product] = mid_price
-            else:
-                self.ema_prices[product] = self.ema_param * mid_price + (1-self.ema_param) * self.ema_prices[product]
+        if self.ema_prices[prod] is None:
+            self.ema_prices[prod] = self.DEFAULT_PRICES[prod]
+        else:
+            self.ema_prices[prod] = self.ema_param * mid_price + (1-self.ema_param) * self.ema_prices[prod]
 
     def get_position(self, product, state : TradingState):
         return state.position.get(product, 0)    
     
     def get_mid_price(self, product, state : TradingState):
-        default_price = self.DEFAULT_PRICES[product]
+        default_price = self.ema_prices[product]
+        if (default_price is None):
+            default_price = self.DEFAULT_PRICES[product]
 
         if product not in state.order_depths:
             return default_price
@@ -148,9 +149,9 @@ class Trader:
         order_list: List[Order] = []
         starfruits_limit = self.POSITION_LIMIT[prod]
         default_price = 5000
-        coefficients = [0.10131031, 0.25656263, 0.20506371, 0.39170549] 
-        cpos = self.get_position(prod, state)
-        cpos_begin = cpos
+        coefficients = [0.19351935, 0.25166263, 0.22349804, 0.330427031]
+        cpos_bid = self.get_position(prod, state)
+        cpos_sell = self.get_position(prod, state)
         
         logger.print(f'{order_depth.sell_orders}, {order_depth.buy_orders}')
 
@@ -164,34 +165,44 @@ class Trader:
         while (coef_index < len(self.last_4_starfruit)):
             last_4_weighted += coefficients[coef_index] * self.last_4_starfruit[coef_index]
             coef_index += 1
-        last_4_weighted += 224.820070087143
+        last_4_weighted += 4.392
         
-        #logger.print(f"LAST 4: {self.last_4_starfruit}, WEIGHTED: {last_4_weighted}, AVERAGE: {last_4_average}")
+        self.update_ema_prices(state, prod)
+        ema_price = self.ema_prices[prod]
+        logger.print(f"LAST 4: {self.last_4_starfruit}, EMA: {ema_price}, WEIGHTED: {last_4_weighted}, AVERAGE: {last_4_average}")
 
         if (len(order_depth.sell_orders) != 0):
             ask_index = 0
-            while (cpos < self.POSITION_LIMIT[prod]):
+            while (ask_index < len(order_depth.sell_orders) and cpos_bid < self.POSITION_LIMIT[prod]):
                 best_ask, best_ask_amount = list(order_depth.sell_orders.items())[ask_index]
-                if (int(best_ask) < last_4_weighted and cpos < self.POSITION_LIMIT[prod]):
+                if (int(best_ask) < ema_price and cpos_bid < self.POSITION_LIMIT[prod]):
                     logger.print("BUY", str(-best_ask_amount) + "x", best_ask)
-                    order_list.append(Order(prod, best_ask, min(-best_ask_amount, self.POSITION_LIMIT[prod] - cpos)))
-                    cpos += -1 * best_ask_amount
+                    order_list.append(Order(prod, best_ask, min(-best_ask_amount, (self.POSITION_LIMIT[prod] - cpos_bid))))
+                    cpos_bid += -1 * best_ask_amount
                     ask_index += 1
                 else: break
         
-        cpos = cpos_begin
         
         if (len(order_depth.buy_orders) != 0):
             bid_index = 0
-            while (cpos > -self.POSITION_LIMIT[prod]):
+            while (bid_index < len(order_depth.buy_orders) and cpos_sell > -self.POSITION_LIMIT[prod]):
                 best_bid, best_bid_amount = list(order_depth.buy_orders.items())[bid_index]
-                if int(best_bid) > last_4_weighted:
+                if int(best_bid) > ema_price:
                     logger.print("SELL", str(best_bid_amount) + "x", best_bid)
-                    order_list.append(Order(prod, best_bid, max(-best_bid_amount, -cpos + self.POSITION_LIMIT[prod])))
-                    cpos += -1 * best_bid_amount
+                    order_list.append(Order(prod, best_bid, max(-best_bid_amount, -(self.POSITION_LIMIT[prod] + cpos_sell))))
+                    cpos_sell += -1 * best_bid_amount
                     bid_index += 1
                 else: break
                 
+        bid_volume = self.POSITION_LIMIT[prod] - cpos_bid
+        ask_volume = -self.POSITION_LIMIT[prod] - cpos_sell
+        
+        if (bid_volume > 0): 
+            order_list.append(Order(prod, math.floor(ema_price - 2), int(bid_volume)))
+        if (ask_volume < 0): 
+            order_list.append(Order(prod, math.ceil(ema_price + 2), int(ask_volume)))
+
+        
         return order_list
                
     def amethyst_orders(self, state: TradingState):
