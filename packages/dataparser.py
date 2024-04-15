@@ -1,4 +1,4 @@
-from packages.datamodel import OrderDepth, Observation, Symbol, Listing, Trade, Product, Position, TradingState, Order
+from datamodel import OrderDepth, Observation, Symbol, Listing, Trade, Product, Position, TradingState, Order
 from typing import Dict, List
 import pandas as pd
 import numpy as np
@@ -15,6 +15,7 @@ import numpy as np
 # market_trades: Dict[Symbol, List[Trade]],
 # position: Dict[Product, Position],
 # observations: Observation
+
 class DataParser:
 
     raw_data: pd.DataFrame

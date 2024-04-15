@@ -1,6 +1,6 @@
 import sys
-sys.path.insert(0, '/Users/ratikiyer/Documents/UIUC/IMC/imc_trading_2024')
-from packages.datamodel import (Time, Symbol, Product, Position, UserId, ObservationValue,
+sys.path.insert(0, '/Users/ratikiyer/Documents/Quant/IMC/imc_trading_2024')
+from datamodel import (Time, Symbol, Product, Position, UserId, ObservationValue,
                                 TradingState, Trade, Listing, Order, OrderDepth, Observation, ConversionObservation)
 from packages.dataparser import DataParser
 from packages.logger import Logger
@@ -12,8 +12,8 @@ import csv
 
 def main():
     
-    file_in = "./data/tutorial_data.csv"
-    file_out = "./data/tutorial_results_data.csv"
+    file_in = "./data/tutorial/tutorial_data.csv"
+    file_out = "./results/tutorial_results_data.csv"
     parser = DataParser()
 
     parser.parse_csv(file_in)

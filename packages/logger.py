@@ -1,5 +1,5 @@
 import json
-from packages.datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
+from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
 from typing import Any
 
 class Logger:
