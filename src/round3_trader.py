@@ -5,7 +5,7 @@ import math
 import copy
 import numpy as np
 import json
-from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
+from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState, ConversionObservation
 from typing import Any, Dict, List
 
 class Logger:
@@ -93,15 +93,29 @@ logger = Logger()
 
 
 class Trader:
-    POSITION_LIMIT = {"AMETHYSTS" : 20, "STARFRUIT" : 20}
-    PRODUCTS = ['AMETHYSTS', 'STARFRUIT']
+    POSITION_LIMIT = {"AMETHYSTS" : 20,
+                      "STARFRUIT" : 20,
+                      "ORCHIDS" : 100,
+                      'CHOCOLATE': 250,
+                      'STRAWBERRIES': 350,
+                      'ROSES': 60,
+                      'GIFT_BASKET': 60}
+    PRODUCTS = ['AMETHYSTS', 'STARFRUIT', 'ORCHIDS', 'CHOCOLATE', 'STRAWBERRIES', 'ROSES', 'GIFT_BASKET']
     DEFAULT_PRICES = {
     'AMETHYSTS' : 10000,
-    'STARFRUIT' : 5000
+    'STARFRUIT' : 5000,
+    'ORCHIDS' : 1200,
     }
     historical_prices = {product: [] for product in PRODUCTS}
     last_4_starfruit = []
     ema_prices = dict()
+    for product in PRODUCTS:
+        ema_prices[product] = None
+    ema_param = 0.5
+
+    orchid_avg_price: float = 0.0
+    orchid_total_position: int = 0
+
     for product in PRODUCTS:
         ema_prices[product] = None
 
@@ -131,7 +145,7 @@ class Trader:
         return (best_bid + best_ask)/2
     
 
-    def starfruit_orders(self, state: TradingState):
+    def starfruit_orders(self, state: TradingState) -> dict[str, List[Order]]:
         prod = 'STARFRUIT'
         order_depth: OrderDepth = state.order_depths[prod]
         order_list: List[Order] = []
@@ -280,14 +294,158 @@ class Trader:
 
         return orders
     
+    def max_orchid_pos(self, state: TradingState) -> int:
+        product = "ORCHIDS"
+        current_position = state.position.get(product, 0)
+        order_depth = state.order_depths[product]
+        return min(self.POSITION_LIMIT[product] - current_position, -order_depth.sell_orders[price])
+    
+    def humidity_effect(self, humidity: float) -> float:
+        adjustment: float
+        if humidity >= 60 and humidity <= 80:
+            adjustment = 0
+        elif humidity < 60:
+            adjustment = + abs(humidity - 60) * 1.02 / 5
+        else:
+            adjustment = abs(humidity - 80) * 1.02 / 5
+        return adjustment
+    
+
+    def update_ema_prices(self, state : TradingState, prod):
+        """
+        Update the exponential moving average of the prices of each product.
+        """
+        mid_price = self.get_mid_price(prod, state)
+            # Update ema price
+        if self.ema_prices[prod] is None:
+            self.ema_prices[prod] = self.DEFAULT_PRICES[prod]
+        else:
+            self.ema_prices[prod] = self.ema_param * mid_price + (1-self.ema_param) * self.ema_prices[prod]
+
+    
+    def orchids_arbitrage(self, state: TradingState) -> list[Order]:
+        prod = "ORCHIDS"
+        conv: int = 0
+        orders = []
+        order_depth = state.order_depths[prod]
+        buy_orders = order_depth.buy_orders
+        transport_fee = state.observations.conversionObservations[prod].transportFees
+        import_tarrif = state.observations.conversionObservations[prod].importTariff
+        lowest_ask_conv = state.observations.conversionObservations[prod].askPrice
+        cpos = state.position.get(prod)
+
+        self.update_ema_prices(state, prod)
+        ema_price = self.ema_prices[prod]
+
+        if buy_orders:
+            highest_bid_orderbook = max(buy_orders.keys())
+            profit2 = highest_bid_orderbook - lowest_ask_conv - import_tarrif - transport_fee
+            logger.print("profit2:" + str(profit2))
+
+            if highest_bid_orderbook:
+                orders.append(Order(prod, highest_bid_orderbook, -buy_orders[highest_bid_orderbook]))
+                self.orchid_total_position += highest_bid_orderbook * buy_orders[highest_bid_orderbook]
+                if cpos:
+                    self.orchid_avg_price = self.orchid_total_position / cpos
+            logger.print("order arb: " + str(conv))
+
+        return orders
+        
+
+    def orchid_orders(self, state: TradingState):
+        conv: int = 0
+        prod = "ORCHIDS"
+        orders = []
+        
+        cpos = state.position.get(prod)
+
+        # if state.observations.conversionObservations[prod].humidity < 60 or state.observations.conversionObservations[prod].humidity > 80:
+        #     price = min(order_depth.sell_orders.keys())
+        #     quantity = min(self.POSITION_LIMIT[prod] - cpos, -order_depth.sell_orders[price])
+        #     orders.append(Order(prod, price, quantity))
+        # elif state.observations.conversionObservations[prod].humidity < 60 or state.observations.conversionObservations[prod].humidity > 80:
+        #     price = max(order_depth.buy_orders.keys())
+        #     quantity = min(self.POSITION_LIMIT[prod] - cpos, -order_depth.buy_orders[price])
+        #     orders.append(Order(prod, price, quantity))
+        transport_fee = state.observations.conversionObservations[prod].transportFees
+        import_tarrif = state.observations.conversionObservations[prod].importTariff
+        orders = self.orchids_arbitrage(state)
+        logger.print(str(cpos))
+        ask_conv = state.observations.conversionObservations[prod].askPrice
+        logger.print(cpos)
+        if cpos and cpos < 0 and (ask_conv - import_tarrif - transport_fee < self.orchid_avg_price):
+            conv = -cpos
+        logger.print(f'Conversions: {conv}')
+        return orders, conv
+
+
+    def gift_basket_arbitrage(self, state: TradingState):
+        prod = 'GIFT_BASKET'
+        cpos_basket = state.position.get(prod)
+        orders = {'CHOCOLATE': 0, 'STRAWBERRIES' : 0, 'ROSES' : 0, 'GIFT_BASKET' : 0}
+
+        basket_buy_orders = state.order_depths['GIFT_BASKET'].buy_orders
+        basket_sell_orders = state.order_depths['GIFT_BASKET'].sell_orders
+        basket_mid_price: float
+        basket_highest_bid: float
+        basket_lowest_ask: float
+        if basket_buy_orders and basket_sell_orders:
+            basket_highest_bid =  max(basket_buy_orders.keys())
+            basket_lowest_ask = min(basket_sell_orders.keys())
+            basket_mid_price = (basket_highest_bid + basket_lowest_ask) / 2
+
+        straw_buy_orders = state.order_depths['STRAWBERRIES'].buy_orders
+        straw_sell_orders = state.order_depths['STRAWBERRIES'].sell_orders
+        straw_mid_price: float
+        straw_highest_bid: float
+        straw_lowest_ask: float
+        if straw_buy_orders and straw_sell_orders:
+            straw_highest_bid =  max(straw_buy_orders.keys())
+            straw_lowest_ask = min(straw_sell_orders.keys())
+            straw_mid_price = ( straw_highest_bid + straw_lowest_ask ) / 2
+        
+        choc_buy_orders = state.order_depths['CHOCOLATE'].buy_orders
+        choc_sell_orders = state.order_depths['CHOCOLATE'].sell_orders
+        choc_mid_price: float
+        choc_highest_bid: float
+        choc_lowest_ask: float
+        if choc_sell_orders and choc_buy_orders:
+            choc_highest_bid = max(choc_buy_orders.keys())
+            choc_lowest_ask = min(choc_sell_orders.keys())
+            choc_mid_price = (choc_highest_bid + choc_lowest_ask) / 2
+
+        rose_buy_orders = state.order_depths['ROSES'].buy_orders
+        rose_sell_orders = state.order_depths['ROSES'].sell_orders
+        rose_mid_price: float
+        rose_highest_bid: float
+        rose_lowest_ask: float
+        if rose_buy_orders and rose_sell_orders:
+            rose_highest_bid = max(rose_buy_orders.keys()) 
+            rose_lowest_ask = min(rose_sell_orders.keys())
+            rose_mid_price = (rose_highest_bid + rose_lowest_ask) / 2
+
+
+        if basket_lowest_ask < (4*choc_highest_bid + 6*straw_highest_bid + rose_highest_bid):
+            orders['GIFT_BASKET'].append(Order('GIFT_BASKET', basket_lowest_ask, 1))
+            orders['CHOCOLATE'].append(Order('CHOCOLATE', choc_highest_bid, -4))
+            orders['STRAWBERRIES'].append(Order('STRAWBERRIES', straw_highest_bid, -6))
+            orders['ROSES'].append(Order('ROSES', rose_highest_bid, -1))
+
+        return orders
+
+        
+        
+
     def run(self, state: TradingState):
         result = {}
+        conversions = 0
 
-        result['STARFRUIT'] = self.starfruit_orders(state)
-        result['AMETHYSTS'] = self.amethyst_orders(state)
+        # result['STARFRUIT'] = self.starfruit_orders(state)
+        # result['AMETHYSTS'] = self.amethyst_orders(state)
+        # result['ORCHIDS'], conversions = self.orchid_orders(state)
+        result = self.gift_basket_arbitrage(state)
     
-        trader_data = "SAMPLE" 
-        
-        conversions = 1
+        trader_data = "SAMPLE"
+        logger.print("run: " + str(conversions))
         logger.flush(state, result, conversions, trader_data)
         return result, conversions, trader_data
